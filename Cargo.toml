@@ -1,0 +1,11 @@
+[package]
+name = "bxl"
+version = "0.1.0"
+authors = ["cyrozap"]
+license = "GPL-3.0+"
+readme = "README.md"
+categories = ["parser-implementations", "command-line-utilities", "encoding"]
+edition = "2018"
+
+[dependencies]
+bit_reverse = "0.1.7"
