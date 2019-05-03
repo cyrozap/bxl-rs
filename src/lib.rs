@@ -381,7 +381,7 @@ fn node_needs_swap(tree: &NodeTree, node: &Node) -> bool {
     node.weight > parent_node.weight
 }
 
-fn update_tree_at_node(mut tree: &mut NodeTree, node: &Node) -> Result<(), String> {
+fn update_tree_at_node(tree: &mut NodeTree, node: &Node) -> Result<(), String> {
     //println!("update_tree");
     let child_addr = node.bit_addr;
     let mut child_node = match tree.get(node) {
@@ -607,7 +607,7 @@ fn update_tree_at_node(mut tree: &mut NodeTree, node: &Node) -> Result<(), Strin
     Ok(())
 }
 
-fn update_tree(mut tree: &mut NodeTree, target: &Node) -> Result<(), String> {
+fn update_tree(tree: &mut NodeTree, target: &Node) -> Result<(), String> {
     let mut node = target.clone();
     while node_needs_swap(tree, &node) {
         // The update_tree_at_node() function takes ~7-93 us to run.
@@ -615,7 +615,7 @@ fn update_tree(mut tree: &mut NodeTree, target: &Node) -> Result<(), String> {
         // Best case total delay: 0 ns
         // Worst case number of executions: > ~7 us
         // Worst case total delay: > ~650 us
-        let r = update_tree_at_node(&mut tree, &node);
+        let r = update_tree_at_node(tree, &node);
         match r {
             Ok(()) => (),
             //Ok(()) => println!("Updated tree for node {}.", node.bit_addr),
