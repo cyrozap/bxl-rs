@@ -4,6 +4,8 @@ version = "0.1.0"
 authors = ["cyrozap"]
 license = "GPL-3.0+"
 readme = "README.md"
+description = "A library for parsing Ultra Librarian \".bxl\" files."
+repository = "https://github.com/cyrozap/bxl-rs"
 categories = ["parser-implementations", "command-line-utilities", "encoding"]
 edition = "2018"
 
