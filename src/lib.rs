@@ -24,12 +24,12 @@ use std::time::{Duration, Instant};
 extern crate bit_reverse;
 use bit_reverse::ParallelReverse;
 
-fn mask_for_bitlen(bitlen: u8) -> u64 {
+fn mask_for_bitlen(bitlen: u8) -> u32 {
     if &bitlen == &0 {
         return 0;
     }
 
-    !(1u64.overflowing_shl((64 - &bitlen).into()).0 - 1)
+    !(1u32.overflowing_shl((32 - &bitlen).into()).0 - 1)
 }
 
 type NodeTree = HashSet<Node>;
@@ -97,7 +97,7 @@ fn print_dot(tree: &NodeTree) {
 
 #[derive(Copy, Clone, Debug, Eq)]
 struct BitAddr {
-    bits: u64,
+    bits: u32,
     bitlen: u8,
 }
 
@@ -118,7 +118,7 @@ impl fmt::Display for BitAddr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut bit_vec: Vec<&str> = vec![];
         for i in 0..self.bitlen {
-            if (self.bits & (1 << (63 - i))) == 0 {
+            if (self.bits & (1 << (31 - i))) == 0 {
                 bit_vec.push("0");
             } else {
                 bit_vec.push("1");
@@ -129,23 +129,23 @@ impl fmt::Display for BitAddr {
 }
 
 impl BitAddr {
-    fn get_masked_bits(&self) -> u64 {
+    fn get_masked_bits(&self) -> u32 {
         self.bits & mask_for_bitlen(self.bitlen)
     }
 
     fn try_from(s: &str) -> Result<BitAddr, String> {
         let len = s.len();
-        if len > 64 {
-            return Err(format!("Invalid bit string length: {} > 64.", len));
+        if len > 32 {
+            return Err(format!("Invalid bit string length: {} > 32.", len));
         }
         let bitlen = len as u8;
 
-        let mut bits: u64 = 0;
+        let mut bits: u32 = 0;
         let str_bytes = s.as_bytes();
         for i in 0..len {
             match str_bytes[i] {
                 b'0' => (),
-                b'1' => bits |= 1 << (63 - i),
+                b'1' => bits |= 1 << (31 - i),
                 s => return Err(format!("Invalid bit string: {}", s)),
             }
         }
@@ -154,13 +154,13 @@ impl BitAddr {
     }
 
     fn append_bit(&self, bit: u8) -> Result<BitAddr, String> {
-        if self.bitlen >= 64 {
+        if self.bitlen >= 32 {
             return Err(format!("Max bitlen: {}", self.bitlen));
         }
 
         let (bits, bitlen) = match bit {
-            0 => (self.bits & !(1 << (63 - self.bitlen)), self.bitlen + 1),
-            1 => (self.bits | 1 << (63 - self.bitlen), self.bitlen + 1),
+            0 => (self.bits & !(1 << (31 - self.bitlen)), self.bitlen + 1),
+            1 => (self.bits | 1 << (31 - self.bitlen), self.bitlen + 1),
             _ => return Err(format!("Invalid bit value \"{}\"--must be 0 or 1.", bit)),
         };
 
@@ -177,7 +177,7 @@ impl BitAddr {
             return Err("The root node has no bits.");
         }
 
-        let last_bit = match (self.bits & (1 << (64 - self.bitlen))) != 0 {
+        let last_bit = match (self.bits & (1 << (32 - self.bitlen))) != 0 {
             false => 0,
             true => 1,
         };
@@ -238,7 +238,7 @@ impl BitAddr {
             return Err("The root node has no siblings.");
         }
 
-        let sibling_bits = self.bits ^ (1 << (64 - self.bitlen));
+        let sibling_bits = self.bits ^ (1 << (32 - self.bitlen));
         Ok(BitAddr {
             bits: sibling_bits,
             bitlen: self.bitlen,
@@ -277,7 +277,7 @@ impl BitAddr {
 #[derive(Copy, Clone, Debug, Eq)]
 struct Node {
     bit_addr: BitAddr,
-    weight: u64,
+    weight: u32,
     symbol: Option<u8>,
 }
 
@@ -319,7 +319,7 @@ impl Node {
     }
 }
 
-fn new_node(bit_addr: BitAddr, weight: u64, symbol: Option<u8>) -> Node {
+fn new_node(bit_addr: BitAddr, weight: u32, symbol: Option<u8>) -> Node {
     Node {
         bit_addr,
         weight,
@@ -339,7 +339,7 @@ fn initialize_tree() -> NodeTree {
             };
             tree.insert(new_node(
                 BitAddr {
-                    bits: ((symbol as u64) << (64 - 8)) & mask,
+                    bits: ((symbol as u32) << (32 - 8)) & mask,
                     bitlen: bitlen,
                 },
                 0,
@@ -744,11 +744,19 @@ mod tests {
     fn bitaddr_to_string() {
         assert_eq!(
             BitAddr {
-                bits: 1 << 63,
+                bits: 1 << 31,
                 bitlen: 1
             }
             .to_string(),
             "1"
+        );
+        assert_eq!(
+            BitAddr {
+                bits: 0,
+                bitlen: 16
+            }
+            .to_string(),
+            "0000000000000000"
         );
         assert_eq!(
             BitAddr {
@@ -760,19 +768,11 @@ mod tests {
         );
         assert_eq!(
             BitAddr {
-                bits: 0,
-                bitlen: 64
-            }
-            .to_string(),
-            "0000000000000000000000000000000000000000000000000000000000000000"
-        );
-        assert_eq!(
-            BitAddr {
                 bits: 0xff,
-                bitlen: 64
+                bitlen: 32
             }
             .to_string(),
-            "0000000000000000000000000000000000000000000000000000000011111111"
+            "00000000000000000000000011111111"
         );
     }
 
@@ -782,15 +782,15 @@ mod tests {
         assert_eq!(
             BitAddr::try_from("101010"),
             Ok(BitAddr {
-                bits: 0b101010 << (64 - 6),
+                bits: 0b101010 << (32 - 6),
                 bitlen: 6
             })
         );
         assert_eq!(
-            BitAddr::try_from("0000000000000000000000000000000000000000000000000000000011111111"),
+            BitAddr::try_from("00000000000000000000000011111111"),
             Ok(BitAddr {
                 bits: 0xff,
-                bitlen: 64
+                bitlen: 32
             })
         );
     }
@@ -800,25 +800,25 @@ mod tests {
         assert_eq!(
             BitAddr {
                 bits: 0,
-                bitlen: 63
+                bitlen: 31
             }
             .append_bit(0)
             .unwrap(),
             BitAddr {
                 bits: 0,
-                bitlen: 64
+                bitlen: 32
             }
         );
         assert_eq!(
             BitAddr {
                 bits: 0,
-                bitlen: 63
+                bitlen: 31
             }
             .append_bit(1)
             .unwrap(),
             BitAddr {
                 bits: 1,
-                bitlen: 64
+                bitlen: 32
             }
         );
         assert_eq!(
@@ -840,7 +840,7 @@ mod tests {
         assert!(BitAddr { bits: 0, bitlen: 0 }.append_bit(2).is_err());
         assert!(BitAddr {
             bits: 0,
-            bitlen: 64
+            bitlen: 32
         }
         .append_bit(0)
         .is_err());
@@ -1074,11 +1074,11 @@ mod tests {
         assert_eq!(
             BitAddr {
                 bits: 1,
-                bitlen: 64
+                bitlen: 32
             },
             BitAddr {
                 bits: 1,
-                bitlen: 64
+                bitlen: 32
             }
         );
 
@@ -1095,11 +1095,11 @@ mod tests {
         assert_eq!(
             BitAddr {
                 bits: 1,
-                bitlen: 63
+                bitlen: 31
             },
             BitAddr {
                 bits: 0,
-                bitlen: 63
+                bitlen: 31
             }
         );
     }
