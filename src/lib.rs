@@ -782,7 +782,7 @@ mod tests {
         assert_eq!(
             BitAddr::try_from("101010"),
             Ok(BitAddr {
-                bits: 0b101010 << 58,
+                bits: 0b101010 << (64 - 6),
                 bitlen: 6
             })
         );
