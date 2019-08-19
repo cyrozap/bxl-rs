@@ -20,7 +20,7 @@ use std::io::{self, Write};
 use std::{env, fs};
 
 extern crate bxl;
-use bxl::decompress;
+use bxl::decompressor::decompress;
 
 fn main() {
     let filename = env::args().nth(1).expect("please supply a filename");
