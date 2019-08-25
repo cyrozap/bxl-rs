@@ -410,6 +410,7 @@ fn update_tree_at_node(tree: &mut NodeTree, node: &Node) -> Result<(), String> {
         }
     };
 
+    // All this collection can take anywhere from ~3-140 us.
     // Collect the child's descendants.
     let mut c_descendants = NodeTree::new();
     // Collect the parent's descendants.
@@ -428,6 +429,7 @@ fn update_tree_at_node(tree: &mut NodeTree, node: &Node) -> Result<(), String> {
         }
     }
 
+    // Descendant removal can take ~0.2-40 us.
     // Remove descendants being moved.
     for desc in &c_descendants {
         assert!(tree.remove(&desc));
@@ -455,6 +457,8 @@ fn update_tree_at_node(tree: &mut NodeTree, node: &Node) -> Result<(), String> {
     */
 
     // Replace P's tree with C's.
+    // This tree replacement can take ~0.09-30 us.
+    // Most of the time it's < 5 us.
     assert_eq!(child_addr, child_node.bit_addr);
     for mut desc in c_descendants {
         //println!("Old c_descendant: {}", desc.bit_addr);
@@ -484,6 +488,8 @@ fn update_tree_at_node(tree: &mut NodeTree, node: &Node) -> Result<(), String> {
     assert_eq!(child_node.bit_addr, parent_addr);
 
     // Replace PS's tree with P's.
+    // This tree replacement can take ~0.2-65 us.
+    // Most of the time it's < 5 us.
     assert_eq!(parent_addr, parent_node.bit_addr);
     for mut desc in p_descendants {
         //println!("Old p_descendant: {}", desc.bit_addr);
@@ -508,6 +514,8 @@ fn update_tree_at_node(tree: &mut NodeTree, node: &Node) -> Result<(), String> {
     assert_eq!(parent_node.bit_addr, parent_sibling_addr);
 
     // Replace C's tree with PS's.
+    // This tree replacement can take ~0.09-65 us.
+    // Most of the time it's < 0.2 us.
     assert_eq!(parent_sibling_addr, parent_sibling_node.bit_addr);
     let new_child_addr = match child_addr.prefix_swap(parent_addr, parent_sibling_addr) {
         Ok(addr) => addr,
