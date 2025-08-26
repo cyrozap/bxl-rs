@@ -846,12 +846,14 @@ mod tests {
     #[test]
     fn bitaddr_append_bit_err() {
         assert!(BitAddr { bits: 0, bitlen: 0 }.append_bit(2).is_err());
-        assert!(BitAddr {
-            bits: 0,
-            bitlen: 32
-        }
-        .append_bit(0)
-        .is_err());
+        assert!(
+            BitAddr {
+                bits: 0,
+                bitlen: 32
+            }
+            .append_bit(0)
+            .is_err()
+        );
     }
 
     #[test]
@@ -956,52 +958,80 @@ mod tests {
 
     #[test]
     fn bitaddr_is_ancestor_of() {
-        assert!(!BitAddr::try_from("")
-            .unwrap()
-            .is_ancestor_of(BitAddr::try_from("").unwrap()));
-        assert!(!BitAddr::try_from("0")
-            .unwrap()
-            .is_ancestor_of(BitAddr::try_from("0").unwrap()));
-        assert!(BitAddr::try_from("")
-            .unwrap()
-            .is_ancestor_of(BitAddr::try_from("0").unwrap()));
-        assert!(BitAddr::try_from("")
-            .unwrap()
-            .is_ancestor_of(BitAddr::try_from("1").unwrap()));
-        assert!(BitAddr::try_from("101010")
-            .unwrap()
-            .is_ancestor_of(BitAddr::try_from("1010100").unwrap()));
-        assert!(BitAddr::try_from("101010")
-            .unwrap()
-            .is_ancestor_of(BitAddr::try_from("1010101").unwrap()));
-        assert!(BitAddr::try_from("")
-            .unwrap()
-            .is_ancestor_of(BitAddr::try_from("00").unwrap()));
-        assert!(BitAddr::try_from("")
-            .unwrap()
-            .is_ancestor_of(BitAddr::try_from("10").unwrap()));
-        assert!(BitAddr::try_from("101010")
-            .unwrap()
-            .is_ancestor_of(BitAddr::try_from("101010000000").unwrap()));
-        assert!(BitAddr::try_from("101010")
-            .unwrap()
-            .is_ancestor_of(BitAddr::try_from("101010111111").unwrap()));
+        assert!(
+            !BitAddr::try_from("")
+                .unwrap()
+                .is_ancestor_of(BitAddr::try_from("").unwrap())
+        );
+        assert!(
+            !BitAddr::try_from("0")
+                .unwrap()
+                .is_ancestor_of(BitAddr::try_from("0").unwrap())
+        );
+        assert!(
+            BitAddr::try_from("")
+                .unwrap()
+                .is_ancestor_of(BitAddr::try_from("0").unwrap())
+        );
+        assert!(
+            BitAddr::try_from("")
+                .unwrap()
+                .is_ancestor_of(BitAddr::try_from("1").unwrap())
+        );
+        assert!(
+            BitAddr::try_from("101010")
+                .unwrap()
+                .is_ancestor_of(BitAddr::try_from("1010100").unwrap())
+        );
+        assert!(
+            BitAddr::try_from("101010")
+                .unwrap()
+                .is_ancestor_of(BitAddr::try_from("1010101").unwrap())
+        );
+        assert!(
+            BitAddr::try_from("")
+                .unwrap()
+                .is_ancestor_of(BitAddr::try_from("00").unwrap())
+        );
+        assert!(
+            BitAddr::try_from("")
+                .unwrap()
+                .is_ancestor_of(BitAddr::try_from("10").unwrap())
+        );
+        assert!(
+            BitAddr::try_from("101010")
+                .unwrap()
+                .is_ancestor_of(BitAddr::try_from("101010000000").unwrap())
+        );
+        assert!(
+            BitAddr::try_from("101010")
+                .unwrap()
+                .is_ancestor_of(BitAddr::try_from("101010111111").unwrap())
+        );
     }
 
     #[test]
     fn bitaddr_is_parent_of() {
-        assert!(BitAddr::try_from("")
-            .unwrap()
-            .is_parent_of(BitAddr::try_from("0").unwrap()));
-        assert!(BitAddr::try_from("")
-            .unwrap()
-            .is_parent_of(BitAddr::try_from("1").unwrap()));
-        assert!(BitAddr::try_from("101010")
-            .unwrap()
-            .is_parent_of(BitAddr::try_from("1010100").unwrap()));
-        assert!(BitAddr::try_from("101010")
-            .unwrap()
-            .is_parent_of(BitAddr::try_from("1010101").unwrap()));
+        assert!(
+            BitAddr::try_from("")
+                .unwrap()
+                .is_parent_of(BitAddr::try_from("0").unwrap())
+        );
+        assert!(
+            BitAddr::try_from("")
+                .unwrap()
+                .is_parent_of(BitAddr::try_from("1").unwrap())
+        );
+        assert!(
+            BitAddr::try_from("101010")
+                .unwrap()
+                .is_parent_of(BitAddr::try_from("1010100").unwrap())
+        );
+        assert!(
+            BitAddr::try_from("101010")
+                .unwrap()
+                .is_parent_of(BitAddr::try_from("1010101").unwrap())
+        );
     }
 
     #[test]
