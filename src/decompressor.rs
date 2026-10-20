@@ -80,6 +80,7 @@ impl NodeTree {
             self[parent].left = new;
         } else {
             debug_assert!(false, "node {old} is not a child of {parent}");
+            return;
         }
         if new != NIL {
             self[new].parent = parent;
@@ -157,21 +158,23 @@ pub fn decompress(input: &[u8]) -> Result<Vec<u8>, String> {
         ));
     }
 
-    let u_size = ((input[0] as u32) << 24
-        | (input[1] as u32) << 16
-        | (input[2] as u32) << 8
-        | (input[3] as u32))
-        .swap_bits() as usize;
-    eprintln!("Decompressed size: {}", &u_size);
+    let header = match input.first_chunk::<4>() {
+        Some(header) => header,
+        None => return Err("Input is too short to contain a size header.".to_string()),
+    };
+    let u_size = u32::from_be_bytes(*header).swap_bits() as usize;
 
-    let compressed = &input[4..];
+    let compressed = input.get(4..).unwrap_or(&[]);
     let c_size = compressed.len();
-    eprintln!("Compressed size: {}", &c_size);
+    let num_bits = match c_size.checked_mul(8) {
+        Some(num_bits) => num_bits,
+        None => return Err("Compressed input is too large to process.".to_string()),
+    };
 
-    let num_bits = c_size * 8;
-    eprintln!("Number of bits: {}", num_bits);
-
-    let mut decompressed: Vec<u8> = Vec::with_capacity(u_size);
+    let mut decompressed: Vec<u8> = Vec::new();
+    decompressed
+        .try_reserve_exact(u_size)
+        .map_err(|err| format!("Failed to allocate {} output bytes: {}", u_size, err))?;
     let mut tree = NodeTree::new();
 
     // The bitstream is padded with a leading zero bit, which selects the
@@ -199,7 +202,13 @@ pub fn decompress(input: &[u8]) -> Result<Vec<u8>, String> {
         }
     }
 
-    assert_eq!(u_size, decompressed.len());
+    if decompressed.len() != u_size {
+        return Err(format!(
+            "Decompressed size mismatch: header says {} bytes, decoded {} bytes.",
+            u_size,
+            decompressed.len()
+        ));
+    }
 
     Ok(decompressed)
 }
@@ -218,6 +227,12 @@ mod tests {
         assert_eq!(get_bit(&[0x80, 0x01, 0x10], 15), 1);
         assert_eq!(get_bit(&[0x80, 0x01, 0x10], 16), 0);
         assert_eq!(get_bit(&[0x80, 0x01, 0x10], 19), 1);
+    }
+
+    #[test]
+    fn decompress_rejects_short_input() {
+        assert!(decompress(&[]).is_err());
+        assert!(decompress(&[0, 0, 0, 0]).is_err());
     }
 
     #[test]
