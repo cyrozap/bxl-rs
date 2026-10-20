@@ -347,7 +347,6 @@ fn decode_reader<R: Read, F: FnMut(u8)>(
 /// if reading the header or compressed data fails, [`Error::UnexpectedEof`] if
 /// the input ends before the declared output size, and [`Error::Allocation`]
 /// if the output buffer cannot be allocated.
-#[inline]
 pub fn decompress_from_reader<R: Read>(mut reader: R) -> Result<Vec<u8>, Error> {
     let u_size = read_header(&mut reader)?;
 
@@ -373,7 +372,6 @@ pub fn decompress_from_reader<R: Read>(mut reader: R) -> Result<Vec<u8>, Error> 
 /// if reading the header or compressed data fails, [`Error::UnexpectedEof`] if
 /// the input ends before the declared output size, and [`Error::Write`] if
 /// writing the decompressed data fails.
-#[inline]
 pub fn decompress_from_reader_to_writer<R: Read, W: Write>(
     mut reader: R,
     mut writer: W,
@@ -405,7 +403,6 @@ pub fn decompress_from_reader_to_writer<R: Read, W: Write>(
 /// [`Error::InputTooLarge`] if the compressed length overflows, [`Error::SizeMismatch`]
 /// if the input does not contain enough data for the declared output size, and
 /// [`Error::Allocation`] if the output buffer cannot be allocated.
-#[inline]
 pub fn decompress_from_slice(input: &[u8]) -> Result<Vec<u8>, Error> {
     let (u_size, compressed) = parse_header(input)?;
 
@@ -432,7 +429,6 @@ pub fn decompress_from_slice(input: &[u8]) -> Result<Vec<u8>, Error> {
 /// [`Error::InputTooLarge`] if the compressed length overflows, [`Error::SizeMismatch`]
 /// if the input does not contain enough data for the declared output size,
 /// and [`Error::Write`] if writing the decompressed data fails.
-#[inline]
 pub fn decompress_from_slice_to_writer<W: Write>(
     input: &[u8],
     mut writer: W,
