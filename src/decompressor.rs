@@ -18,6 +18,8 @@
 
 extern crate bit_reverse;
 use bit_reverse::ParallelReverse;
+use std::collections::TryReserveError;
+use std::fmt;
 use std::io::{self, Read, Write};
 use std::ops::{Index, IndexMut};
 
@@ -27,6 +29,55 @@ use std::ops::{Index, IndexMut};
 // in O(1) without allocating a node per tree node.
 const NODE_COUNT: usize = 511;
 const NIL: u16 = u16::MAX;
+
+/// Errors returned by the BXL decompression API.
+#[derive(Debug)]
+pub enum Error {
+    /// The input does not contain a complete four-byte size header.
+    InputTooShort,
+    /// The compressed length cannot be represented as a bit count.
+    InputTooLarge,
+    /// The compressed input ended before the declared output size was produced.
+    UnexpectedEof { expected: usize, decoded: usize },
+    /// Decoding produced a different number of bytes than the header declared.
+    SizeMismatch { expected: usize, actual: usize },
+    /// The output buffer could not be allocated.
+    Allocation(TryReserveError),
+    /// Reading compressed input failed.
+    Read(io::Error),
+    /// Writing decompressed output failed.
+    Write(io::Error),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::InputTooShort => f.write_str("input is too short to contain a BXL size header"),
+            Error::InputTooLarge => f.write_str("compressed input is too large to process"),
+            Error::UnexpectedEof { expected, decoded } => write!(
+                f,
+                "compressed input ended after {decoded} of {expected} output bytes"
+            ),
+            Error::SizeMismatch { expected, actual } => write!(
+                f,
+                "decompressed size mismatch: header says {expected} bytes, decoded {actual} bytes"
+            ),
+            Error::Allocation(err) => write!(f, "failed to allocate output buffer: {err}"),
+            Error::Read(err) => write!(f, "failed to read compressed input: {err}"),
+            Error::Write(err) => write!(f, "failed to write decompressed data: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Allocation(err) => Some(err),
+            Error::Read(err) | Error::Write(err) => Some(err),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct TreeNode {
@@ -151,10 +202,10 @@ fn get_bit(input: &[u8], bit: usize) -> u8 {
     (input[bit >> 3] >> (7 - (bit & 7))) & 1
 }
 
-fn parse_header(input: &[u8]) -> Result<(usize, &[u8]), String> {
+fn parse_header(input: &[u8]) -> Result<(usize, &[u8]), Error> {
     let header = match input.first_chunk::<4>() {
         Some(header) => header,
-        None => return Err("Input is too short to contain a size header.".to_string()),
+        None => return Err(Error::InputTooShort),
     };
     let u_size = u32::from_be_bytes(*header).swap_bits() as usize;
     let compressed = input.get(4..).unwrap_or(&[]);
@@ -163,10 +214,10 @@ fn parse_header(input: &[u8]) -> Result<(usize, &[u8]), String> {
 }
 
 #[inline(always)]
-fn decode<F: FnMut(u8)>(compressed: &[u8], u_size: usize, mut emit: F) -> Result<(), String> {
+fn decode<F: FnMut(u8)>(compressed: &[u8], u_size: usize, mut emit: F) -> Result<(), Error> {
     let num_bits = match compressed.len().checked_mul(8) {
         Some(num_bits) => num_bits,
-        None => return Err("Compressed input is too large to process.".to_string()),
+        None => return Err(Error::InputTooLarge),
     };
 
     let mut tree = NodeTree::new();
@@ -199,21 +250,22 @@ fn decode<F: FnMut(u8)>(compressed: &[u8], u_size: usize, mut emit: F) -> Result
     }
 
     if decoded != u_size {
-        return Err(format!(
-            "Decompressed size mismatch: header says {} bytes, decoded {} bytes.",
-            u_size, decoded
-        ));
+        return Err(Error::SizeMismatch {
+            expected: u_size,
+            actual: decoded,
+        });
     }
 
     Ok(())
 }
 
-fn read_header<R: Read>(reader: &mut R) -> Result<usize, String> {
+fn read_header<R: Read>(reader: &mut R) -> Result<usize, Error> {
     let mut header = [0u8; 4];
-    reader
-        .read_exact(&mut header)
-        .map_err(|err| format!("Failed to read BXL header: {}", err))?;
-    Ok(u32::from_be_bytes(header).swap_bits() as usize)
+    match reader.read_exact(&mut header) {
+        Ok(()) => Ok(u32::from_be_bytes(header).swap_bits() as usize),
+        Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => Err(Error::InputTooShort),
+        Err(err) => Err(Error::Read(err)),
+    }
 }
 
 struct ByteReader<R> {
@@ -241,7 +293,7 @@ fn decode_reader<R: Read, F: FnMut(u8)>(
     reader: &mut R,
     u_size: usize,
     mut emit: F,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let mut bytes = ByteReader::new(reader);
     let mut tree = NodeTree::new();
     let mut node: u16 = 2;
@@ -251,12 +303,12 @@ fn decode_reader<R: Read, F: FnMut(u8)>(
         let byte = match bytes.next_byte() {
             Ok(Some(byte)) => byte,
             Ok(None) => {
-                return Err(format!(
-                    "Compressed input ended early: header says {} bytes, decoded {} bytes.",
-                    u_size, decoded
-                ));
+                return Err(Error::UnexpectedEof {
+                    expected: u_size,
+                    decoded,
+                });
             }
-            Err(err) => return Err(format!("Failed to read compressed input: {}", err)),
+            Err(err) => return Err(Error::Read(err)),
         };
 
         for shift in (0..8).rev() {
@@ -288,14 +340,21 @@ fn decode_reader<R: Read, F: FnMut(u8)>(
 /// Decompress a BXL payload from a reader into a newly allocated `Vec`.
 ///
 /// Wrap file-backed readers in a `BufReader` to avoid one read per byte.
+///
+/// # Errors
+///
+/// Returns [`Error::InputTooShort`] if the header is incomplete, [`Error::Read`]
+/// if reading the header or compressed data fails, [`Error::UnexpectedEof`] if
+/// the input ends before the declared output size, and [`Error::Allocation`]
+/// if the output buffer cannot be allocated.
 #[inline]
-pub fn decompress_from_reader<R: Read>(mut reader: R) -> Result<Vec<u8>, String> {
+pub fn decompress_from_reader<R: Read>(mut reader: R) -> Result<Vec<u8>, Error> {
     let u_size = read_header(&mut reader)?;
 
     let mut decompressed: Vec<u8> = Vec::new();
     decompressed
         .try_reserve_exact(u_size)
-        .map_err(|err| format!("Failed to allocate {} output bytes: {}", u_size, err))?;
+        .map_err(Error::Allocation)?;
 
     decode_reader(&mut reader, u_size, |byte| decompressed.push(byte))?;
 
@@ -307,11 +366,18 @@ pub fn decompress_from_reader<R: Read>(mut reader: R) -> Result<Vec<u8>, String>
 /// Wrap file-backed readers in a `BufReader` to avoid one read per byte.
 /// Bytes are written directly to `writer`; wrap it in a `BufWriter` if
 /// desired. The number of bytes written is returned on success.
+///
+/// # Errors
+///
+/// Returns [`Error::InputTooShort`] if the header is incomplete, [`Error::Read`]
+/// if reading the header or compressed data fails, [`Error::UnexpectedEof`] if
+/// the input ends before the declared output size, and [`Error::Write`] if
+/// writing the decompressed data fails.
 #[inline]
 pub fn decompress_from_reader_to_writer<R: Read, W: Write>(
     mut reader: R,
     mut writer: W,
-) -> Result<usize, String> {
+) -> Result<usize, Error> {
     let u_size = read_header(&mut reader)?;
     let mut write_error: Option<io::Error> = None;
 
@@ -325,21 +391,28 @@ pub fn decompress_from_reader_to_writer<R: Read, W: Write>(
     })?;
 
     if let Some(err) = write_error {
-        return Err(format!("Failed to write decompressed data: {}", err));
+        return Err(Error::Write(err));
     }
 
     Ok(u_size)
 }
 
 /// Decompress a BXL payload into a newly allocated `Vec`.
+///
+/// # Errors
+///
+/// Returns [`Error::InputTooShort`] if the input lacks a complete header,
+/// [`Error::InputTooLarge`] if the compressed length overflows, [`Error::SizeMismatch`]
+/// if the input does not contain enough data for the declared output size, and
+/// [`Error::Allocation`] if the output buffer cannot be allocated.
 #[inline]
-pub fn decompress_from_slice(input: &[u8]) -> Result<Vec<u8>, String> {
+pub fn decompress_from_slice(input: &[u8]) -> Result<Vec<u8>, Error> {
     let (u_size, compressed) = parse_header(input)?;
 
     let mut decompressed: Vec<u8> = Vec::new();
     decompressed
         .try_reserve_exact(u_size)
-        .map_err(|err| format!("Failed to allocate {} output bytes: {}", u_size, err))?;
+        .map_err(Error::Allocation)?;
 
     decode(compressed, u_size, |byte| decompressed.push(byte))?;
 
@@ -352,11 +425,18 @@ pub fn decompress_from_slice(input: &[u8]) -> Result<Vec<u8>, String> {
 /// `decompress_from_slice` for a `Vec`) if buffering is desired. The number
 /// of bytes written is returned on success. If decoding fails after output
 /// has been produced, `writer` may already have received a partial result.
+///
+/// # Errors
+///
+/// Returns [`Error::InputTooShort`] if the input lacks a complete header,
+/// [`Error::InputTooLarge`] if the compressed length overflows, [`Error::SizeMismatch`]
+/// if the input does not contain enough data for the declared output size,
+/// and [`Error::Write`] if writing the decompressed data fails.
 #[inline]
 pub fn decompress_from_slice_to_writer<W: Write>(
     input: &[u8],
     mut writer: W,
-) -> Result<usize, String> {
+) -> Result<usize, Error> {
     let (u_size, compressed) = parse_header(input)?;
     let mut write_error: Option<std::io::Error> = None;
 
@@ -370,7 +450,7 @@ pub fn decompress_from_slice_to_writer<W: Write>(
     })?;
 
     if let Some(err) = write_error {
-        return Err(format!("Failed to write decompressed data: {}", err));
+        return Err(Error::Write(err));
     }
 
     Ok(u_size)
@@ -394,8 +474,14 @@ mod tests {
 
     #[test]
     fn decompress_from_slice_rejects_short_input() {
-        assert!(decompress_from_slice(&[]).is_err());
-        assert!(decompress_from_slice(&[0, 0, 0]).is_err());
+        assert!(matches!(
+            decompress_from_slice(&[]),
+            Err(Error::InputTooShort)
+        ));
+        assert!(matches!(
+            decompress_from_slice(&[0, 0, 0]),
+            Err(Error::InputTooShort)
+        ));
     }
 
     #[test]
