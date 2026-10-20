@@ -20,7 +20,7 @@ use std::io::{self, BufWriter, Write};
 use std::{env, fs};
 
 extern crate bxl;
-use bxl::decompressor::decompress_to;
+use bxl::decompressor::decompress_from_slice_to_writer;
 
 fn main() {
     let filename = env::args().nth(1).expect("please supply a filename");
@@ -34,7 +34,7 @@ fn main() {
     };
     let stdout = io::stdout();
     let mut writer = BufWriter::new(stdout.lock());
-    match decompress_to(&file, &mut writer) {
+    match decompress_from_slice_to_writer(&file, &mut writer) {
         Ok(_) => {
             if let Err(e) = writer.flush() {
                 eprintln!("Failed to write to stdout: {}", e);

@@ -289,7 +289,7 @@ fn decode_reader<R: Read, F: FnMut(u8)>(
 ///
 /// Wrap file-backed readers in a `BufReader` to avoid one read per byte.
 #[inline]
-pub fn decompress_reader<R: Read>(mut reader: R) -> Result<Vec<u8>, String> {
+pub fn decompress_from_reader<R: Read>(mut reader: R) -> Result<Vec<u8>, String> {
     let u_size = read_header(&mut reader)?;
 
     let mut decompressed: Vec<u8> = Vec::new();
@@ -308,7 +308,7 @@ pub fn decompress_reader<R: Read>(mut reader: R) -> Result<Vec<u8>, String> {
 /// Bytes are written directly to `writer`; wrap it in a `BufWriter` if
 /// desired. The number of bytes written is returned on success.
 #[inline]
-pub fn decompress_reader_to<R: Read, W: Write>(
+pub fn decompress_from_reader_to_writer<R: Read, W: Write>(
     mut reader: R,
     mut writer: W,
 ) -> Result<usize, String> {
@@ -333,7 +333,7 @@ pub fn decompress_reader_to<R: Read, W: Write>(
 
 /// Decompress a BXL payload into a newly allocated `Vec`.
 #[inline]
-pub fn decompress(input: &[u8]) -> Result<Vec<u8>, String> {
+pub fn decompress_from_slice(input: &[u8]) -> Result<Vec<u8>, String> {
     let (u_size, compressed) = parse_header(input)?;
 
     let mut decompressed: Vec<u8> = Vec::new();
@@ -349,11 +349,14 @@ pub fn decompress(input: &[u8]) -> Result<Vec<u8>, String> {
 /// Decompress a BXL payload, writing the result to `writer`.
 ///
 /// Bytes are written directly to `writer`; wrap it in a `BufWriter` (or use
-/// `decompress` for a `Vec`) if buffering is desired. The number of bytes
-/// written is returned on success. If decoding fails after output has been
-/// produced, `writer` may already have received a partial result.
+/// `decompress_from_slice` for a `Vec`) if buffering is desired. The number
+/// of bytes written is returned on success. If decoding fails after output
+/// has been produced, `writer` may already have received a partial result.
 #[inline]
-pub fn decompress_to<W: Write>(input: &[u8], mut writer: W) -> Result<usize, String> {
+pub fn decompress_from_slice_to_writer<W: Write>(
+    input: &[u8],
+    mut writer: W,
+) -> Result<usize, String> {
     let (u_size, compressed) = parse_header(input)?;
     let mut write_error: Option<std::io::Error> = None;
 
@@ -390,19 +393,25 @@ mod tests {
     }
 
     #[test]
-    fn decompress_rejects_short_input() {
-        assert!(decompress(&[]).is_err());
-        assert!(decompress(&[0, 0, 0]).is_err());
+    fn decompress_from_slice_rejects_short_input() {
+        assert!(decompress_from_slice(&[]).is_err());
+        assert!(decompress_from_slice(&[0, 0, 0]).is_err());
     }
 
     #[test]
-    fn decompress_reader_accepts_empty_payload() {
+    fn decompress_from_reader_accepts_empty_payload() {
         let input = [0u8; 4];
 
-        assert_eq!(decompress_reader(&input[..]).unwrap(), Vec::<u8>::new());
+        assert_eq!(
+            decompress_from_reader(&input[..]).unwrap(),
+            Vec::<u8>::new()
+        );
 
         let mut output = Vec::new();
-        assert_eq!(decompress_reader_to(&input[..], &mut output).unwrap(), 0);
+        assert_eq!(
+            decompress_from_reader_to_writer(&input[..], &mut output).unwrap(),
+            0
+        );
         assert!(output.is_empty());
     }
 
