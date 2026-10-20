@@ -456,6 +456,12 @@ pub fn decompress_from_slice_to_writer<W: Write>(
 mod tests {
     use super::*;
 
+    const EMPTY_BXL: &[u8] = &[0x00, 0x00, 0x00, 0x00];
+    const HELLO_WORLD_BXL: &[u8] = &[
+        0x30, 0x00, 0x00, 0x00, 0xd0, 0x95, 0x63, 0x2b, 0x59, 0xa0, 0x2e, 0x50, 0x51, 0x91, 0x80,
+    ];
+    const HELLO_WORLD: &[u8] = b"hello, world";
+
     #[test]
     fn get_bit_ok() {
         assert_eq!(get_bit(&[0x80], 0), 1);
@@ -481,20 +487,33 @@ mod tests {
     }
 
     #[test]
-    fn decompress_from_reader_accepts_empty_payload() {
-        let input = [0u8; 4];
-
+    fn decompress_empty_payload() {
+        assert_eq!(decompress_from_slice(EMPTY_BXL).unwrap(), Vec::<u8>::new());
         assert_eq!(
-            decompress_from_reader(&input[..]).unwrap(),
+            decompress_from_reader(&EMPTY_BXL[..]).unwrap(),
             Vec::<u8>::new()
         );
 
         let mut output = Vec::new();
         assert_eq!(
-            decompress_from_reader_to_writer(&input[..], &mut output).unwrap(),
+            decompress_from_reader_to_writer(&EMPTY_BXL[..], &mut output).unwrap(),
             0
         );
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn decompress_hello_world() {
+        assert_eq!(decompress_from_slice(HELLO_WORLD_BXL).unwrap(), HELLO_WORLD);
+    }
+
+    #[test]
+    fn decompress_truncated_hello_world_fails() {
+        let truncated = &HELLO_WORLD_BXL[..HELLO_WORLD_BXL.len() - 1];
+        assert!(matches!(
+            decompress_from_slice(truncated),
+            Err(Error::SizeMismatch { .. })
+        ));
     }
 
     #[test]
