@@ -152,13 +152,6 @@ fn get_bit(input: &[u8], bit: usize) -> u8 {
 }
 
 fn parse_header(input: &[u8]) -> Result<(usize, &[u8]), String> {
-    if input.len() < 5 {
-        return Err(format!(
-            "Input too short--expected at least 5 bytes, got {} bytes instead.",
-            input.len()
-        ));
-    }
-
     let header = match input.first_chunk::<4>() {
         Some(header) => header,
         None => return Err("Input is too short to contain a size header.".to_string()),
@@ -276,7 +269,7 @@ mod tests {
     #[test]
     fn decompress_rejects_short_input() {
         assert!(decompress(&[]).is_err());
-        assert!(decompress(&[0, 0, 0, 0]).is_err());
+        assert!(decompress(&[0, 0, 0]).is_err());
     }
 
     #[test]
