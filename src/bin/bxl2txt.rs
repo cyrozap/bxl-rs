@@ -28,7 +28,7 @@ fn main() {
     let file = match file {
         Ok(f) => f,
         Err(error) => {
-            eprintln!("Error opening file {:?}: {:?}", &filename, error);
+            eprintln!("Error opening file {:?}: {:?}", filename, error);
             return;
         }
     };
