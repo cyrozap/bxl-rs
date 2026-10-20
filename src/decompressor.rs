@@ -16,12 +16,12 @@
  *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-extern crate bit_reverse;
-use bit_reverse::ParallelReverse;
 use std::collections::TryReserveError;
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::ops::{Index, IndexMut};
+
+use bit_reverse::ParallelReverse;
 
 // The BXL code tree is always a complete binary tree with 8 levels of
 // edges: 255 internal nodes plus 256 leaves, for a total of 511 nodes.
