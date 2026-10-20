@@ -1,6 +1,6 @@
 /*
  *  src/bin/bxl2txt.rs - A simple utility to convert a BXL file to plaintext.
- *  Copyright (C) 2019  Forest Crossman <cyrozap@gmail.com>
+ *  Copyright (C) 2019, 2026  Forest Crossman <cyrozap@gmail.com>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -16,11 +16,11 @@
  *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 use std::{env, fs};
 
 extern crate bxl;
-use bxl::decompressor::decompress;
+use bxl::decompressor::decompress_to;
 
 fn main() {
     let filename = env::args().nth(1).expect("please supply a filename");
@@ -32,11 +32,14 @@ fn main() {
             return;
         }
     };
-    match decompress(&file) {
-        Ok(d) => match io::stdout().write(&d) {
-            Ok(_) => (),
-            Err(e) => eprintln!("Failed to write to stdout: {}", e),
-        },
+    let stdout = io::stdout();
+    let mut writer = BufWriter::new(stdout.lock());
+    match decompress_to(&file, &mut writer) {
+        Ok(_) => {
+            if let Err(e) = writer.flush() {
+                eprintln!("Failed to write to stdout: {}", e);
+            }
+        }
         Err(e) => eprintln!("Failed to decompress: {}", e),
     }
 }

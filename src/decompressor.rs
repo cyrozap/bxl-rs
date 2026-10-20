@@ -18,6 +18,7 @@
 
 extern crate bit_reverse;
 use bit_reverse::ParallelReverse;
+use std::io::Write;
 use std::ops::{Index, IndexMut};
 
 // The BXL code tree is always a complete binary tree with 8 levels of
@@ -150,7 +151,7 @@ fn get_bit(input: &[u8], bit: usize) -> u8 {
     (input[bit >> 3] >> (7 - (bit & 7))) & 1
 }
 
-pub fn decompress(input: &[u8]) -> Result<Vec<u8>, String> {
+fn parse_header(input: &[u8]) -> Result<(usize, &[u8]), String> {
     if input.len() < 5 {
         return Err(format!(
             "Input too short--expected at least 5 bytes, got {} bytes instead.",
@@ -163,26 +164,27 @@ pub fn decompress(input: &[u8]) -> Result<Vec<u8>, String> {
         None => return Err("Input is too short to contain a size header.".to_string()),
     };
     let u_size = u32::from_be_bytes(*header).swap_bits() as usize;
-
     let compressed = input.get(4..).unwrap_or(&[]);
-    let c_size = compressed.len();
-    let num_bits = match c_size.checked_mul(8) {
+
+    Ok((u_size, compressed))
+}
+
+#[inline(always)]
+fn decode<F: FnMut(u8)>(compressed: &[u8], u_size: usize, mut emit: F) -> Result<(), String> {
+    let num_bits = match compressed.len().checked_mul(8) {
         Some(num_bits) => num_bits,
         None => return Err("Compressed input is too large to process.".to_string()),
     };
 
-    let mut decompressed: Vec<u8> = Vec::new();
-    decompressed
-        .try_reserve_exact(u_size)
-        .map_err(|err| format!("Failed to allocate {} output bytes: {}", u_size, err))?;
     let mut tree = NodeTree::new();
 
     // The bitstream is padded with a leading zero bit, which selects the
     // root's right child. Start there and consume the real bits.
     let mut node: u16 = 2;
+    let mut decoded = 0usize;
 
     for bit in 0..num_bits {
-        if decompressed.len() == u_size {
+        if decoded == u_size {
             break;
         }
 
@@ -195,22 +197,64 @@ pub fn decompress(input: &[u8]) -> Result<Vec<u8>, String> {
 
         let symbol = tree[node].symbol;
         if symbol >= 0 {
-            decompressed.push(symbol as u8);
+            emit(symbol as u8);
+            decoded += 1;
             tree[node].weight += 1;
             tree.update(node);
             node = 0;
         }
     }
 
-    if decompressed.len() != u_size {
+    if decoded != u_size {
         return Err(format!(
             "Decompressed size mismatch: header says {} bytes, decoded {} bytes.",
-            u_size,
-            decompressed.len()
+            u_size, decoded
         ));
     }
 
+    Ok(())
+}
+
+/// Decompress a BXL payload into a newly allocated `Vec`.
+#[inline]
+pub fn decompress(input: &[u8]) -> Result<Vec<u8>, String> {
+    let (u_size, compressed) = parse_header(input)?;
+
+    let mut decompressed: Vec<u8> = Vec::new();
+    decompressed
+        .try_reserve_exact(u_size)
+        .map_err(|err| format!("Failed to allocate {} output bytes: {}", u_size, err))?;
+
+    decode(compressed, u_size, |byte| decompressed.push(byte))?;
+
     Ok(decompressed)
+}
+
+/// Decompress a BXL payload, writing the result to `writer`.
+///
+/// Bytes are written directly to `writer`; wrap it in a `BufWriter` (or use
+/// `decompress` for a `Vec`) if buffering is desired. The number of bytes
+/// written is returned on success. If decoding fails after output has been
+/// produced, `writer` may already have received a partial result.
+#[inline]
+pub fn decompress_to<W: Write>(input: &[u8], mut writer: W) -> Result<usize, String> {
+    let (u_size, compressed) = parse_header(input)?;
+    let mut write_error: Option<std::io::Error> = None;
+
+    decode(compressed, u_size, |byte| {
+        if write_error.is_some() {
+            return;
+        }
+        if let Err(err) = writer.write_all(&[byte]) {
+            write_error = Some(err);
+        }
+    })?;
+
+    if let Some(err) = write_error {
+        return Err(format!("Failed to write decompressed data: {}", err));
+    }
+
+    Ok(u_size)
 }
 
 #[cfg(test)]
