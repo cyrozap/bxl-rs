@@ -18,7 +18,7 @@
 
 extern crate bit_reverse;
 use bit_reverse::ParallelReverse;
-use std::io::Write;
+use std::io::{self, Read, Write};
 use std::ops::{Index, IndexMut};
 
 // The BXL code tree is always a complete binary tree with 8 levels of
@@ -208,6 +208,129 @@ fn decode<F: FnMut(u8)>(compressed: &[u8], u_size: usize, mut emit: F) -> Result
     Ok(())
 }
 
+fn read_header<R: Read>(reader: &mut R) -> Result<usize, String> {
+    let mut header = [0u8; 4];
+    reader
+        .read_exact(&mut header)
+        .map_err(|err| format!("Failed to read BXL header: {}", err))?;
+    Ok(u32::from_be_bytes(header).swap_bits() as usize)
+}
+
+struct ByteReader<R> {
+    reader: R,
+}
+
+impl<R: Read> ByteReader<R> {
+    fn new(reader: R) -> Self {
+        Self { reader }
+    }
+
+    #[inline]
+    fn next_byte(&mut self) -> io::Result<Option<u8>> {
+        let mut byte = [0u8; 1];
+        match self.reader.read_exact(&mut byte) {
+            Ok(()) => Ok(Some(byte[0])),
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+}
+
+#[inline(always)]
+fn decode_reader<R: Read, F: FnMut(u8)>(
+    reader: &mut R,
+    u_size: usize,
+    mut emit: F,
+) -> Result<(), String> {
+    let mut bytes = ByteReader::new(reader);
+    let mut tree = NodeTree::new();
+    let mut node: u16 = 2;
+    let mut decoded = 0usize;
+
+    while decoded < u_size {
+        let byte = match bytes.next_byte() {
+            Ok(Some(byte)) => byte,
+            Ok(None) => {
+                return Err(format!(
+                    "Compressed input ended early: header says {} bytes, decoded {} bytes.",
+                    u_size, decoded
+                ));
+            }
+            Err(err) => return Err(format!("Failed to read compressed input: {}", err)),
+        };
+
+        for shift in (0..8).rev() {
+            if decoded == u_size {
+                break;
+            }
+
+            let bit_value = (byte >> shift) & 1;
+            node = if bit_value != 0 {
+                tree[node].left
+            } else {
+                tree[node].right
+            };
+
+            let symbol = tree[node].symbol;
+            if symbol >= 0 {
+                emit(symbol as u8);
+                decoded += 1;
+                tree[node].weight += 1;
+                tree.update(node);
+                node = 0;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Decompress a BXL payload from a reader into a newly allocated `Vec`.
+///
+/// Wrap file-backed readers in a `BufReader` to avoid one read per byte.
+#[inline]
+pub fn decompress_reader<R: Read>(mut reader: R) -> Result<Vec<u8>, String> {
+    let u_size = read_header(&mut reader)?;
+
+    let mut decompressed: Vec<u8> = Vec::new();
+    decompressed
+        .try_reserve_exact(u_size)
+        .map_err(|err| format!("Failed to allocate {} output bytes: {}", u_size, err))?;
+
+    decode_reader(&mut reader, u_size, |byte| decompressed.push(byte))?;
+
+    Ok(decompressed)
+}
+
+/// Decompress a BXL payload from a reader, writing to `writer`.
+///
+/// Wrap file-backed readers in a `BufReader` to avoid one read per byte.
+/// Bytes are written directly to `writer`; wrap it in a `BufWriter` if
+/// desired. The number of bytes written is returned on success.
+#[inline]
+pub fn decompress_reader_to<R: Read, W: Write>(
+    mut reader: R,
+    mut writer: W,
+) -> Result<usize, String> {
+    let u_size = read_header(&mut reader)?;
+    let mut write_error: Option<io::Error> = None;
+
+    decode_reader(&mut reader, u_size, |byte| {
+        if write_error.is_some() {
+            return;
+        }
+        if let Err(err) = writer.write_all(&[byte]) {
+            write_error = Some(err);
+        }
+    })?;
+
+    if let Some(err) = write_error {
+        return Err(format!("Failed to write decompressed data: {}", err));
+    }
+
+    Ok(u_size)
+}
+
 /// Decompress a BXL payload into a newly allocated `Vec`.
 #[inline]
 pub fn decompress(input: &[u8]) -> Result<Vec<u8>, String> {
@@ -270,6 +393,17 @@ mod tests {
     fn decompress_rejects_short_input() {
         assert!(decompress(&[]).is_err());
         assert!(decompress(&[0, 0, 0]).is_err());
+    }
+
+    #[test]
+    fn decompress_reader_accepts_empty_payload() {
+        let input = [0u8; 4];
+
+        assert_eq!(decompress_reader(&input[..]).unwrap(), Vec::<u8>::new());
+
+        let mut output = Vec::new();
+        assert_eq!(decompress_reader_to(&input[..], &mut output).unwrap(), 0);
+        assert!(output.is_empty());
     }
 
     #[test]
