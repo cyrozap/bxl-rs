@@ -10,7 +10,7 @@ categories = ["parser-implementations", "command-line-utilities", "encoding"]
 edition = "2024"
 
 [dependencies]
-bit_reverse = "0.1.7"
+bit_reverse = "0.1.8"
 
 [dev-dependencies]
 sha2 = "0.10"
