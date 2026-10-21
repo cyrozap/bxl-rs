@@ -16,6 +16,68 @@
  *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+//! BXL decompression.
+//!
+//! # Format
+//!
+//! A BXL payload begins with a four-byte header containing the decompressed
+//! size as a bit-reversed big-endian `u32`. The remaining bytes form an
+//! adaptive-Huffman bitstream packed most-significant-bit first.
+//!
+//! The decoder behaves as if a single zero padding bit preceded the stream.
+//! That lets the first symbol be decoded with seven explicit bits; every
+//! subsequent symbol uses the full eight-bit path through the code tree.
+//!
+//! # Code tree
+//!
+//! The initial tree is the complete binary tree of depth 8: 255 internal
+//! nodes and 256 leaves, for 511 nodes total. A 1 bit selects the left child
+//! and a 0 bit selects the right child. Leaves store the byte values.
+//!
+//! The tree is kept in a flat arena. Each node stores its weight, parent, left
+//! and right child indices, and an optional leaf symbol. Interior nodes have
+//! no symbol, while a leaf's symbol identifies the decoded byte. The flat
+//! representation lets rotations relink a few indices without allocating.
+//!
+//! # Adaptive update
+//!
+//! Every node starts with weight 0. After a leaf is decoded, its weight is
+//! incremented. If the leaf has become heavier than its parent, the decoder
+//! rotates the leaf, its parent, and the parent's sibling so that the heavier
+//! node moves closer to the root. The weights of the rotated parent and
+//! grandparent are recomputed from their new children, and the update
+//! continues upward from the nodes whose links changed.
+//!
+//! This keeps the tree ordered by weight (the sibling property), allowing
+//! frequently occurring bytes to be represented by shorter paths.
+//!
+//! Decoding stops as soon as the header's declared number of output bytes has
+//! been produced. Any remaining padding bits in the final compressed byte are
+//! ignored.
+//!
+//! # Input and output
+//!
+//! The slice-based functions operate directly on memory and are the fastest
+//! option when the compressed input is already available:
+//!
+//! | Input | Output | Function |
+//! |---|---|---|
+//! | `&[u8]` | `Vec<u8>` | [`decompress_from_slice`] |
+//! | `&[u8]` | `Write` | [`decompress_from_slice_to_writer`] |
+//! | `Read` | `Vec<u8>` | [`decompress_from_reader`] |
+//! | `Read` | `Write` | [`decompress_from_reader_to_writer`] |
+//!
+//! The reader functions read one compressed byte at a time and do not buffer
+//! internally. Wrap file-backed readers in [`std::io::BufReader`] to avoid a
+//! system call per byte. Likewise, writer output is unbuffered; use
+//! [`std::io::BufWriter`] when writing to a file. If an error occurs after
+//! output has started, the destination may already contain partial data.
+//!
+//! # Errors
+//!
+//! All public functions return [`Error`], which distinguishes malformed or
+//! truncated input, I/O failures, size mismatches, and allocation failure.
+
 use std::collections::TryReserveError;
 use std::fmt;
 use std::io::{self, Read, Write};
