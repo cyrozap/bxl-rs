@@ -14,3 +14,8 @@ bit_reverse = "0.1.7"
 
 [dev-dependencies]
 sha2 = "0.10"
+criterion = "0.5"
+
+[[bench]]
+name = "decompress"
+harness = false
