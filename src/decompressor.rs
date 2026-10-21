@@ -23,11 +23,18 @@ use std::ops::{Index, IndexMut};
 
 use bit_reverse::ParallelReverse;
 
-// The BXL code tree is always a complete binary tree with 8 levels of
-// edges: 255 internal nodes plus 256 leaves, for a total of 511 nodes.
-// Using a fixed-size arena keyed by u16 indices lets us relink subtrees
-// in O(1) without allocating a node per tree node.
+// BXL decompression uses an adaptive Huffman code tree. The tree always
+// has the same shape: a complete binary tree with 8 levels of edges
+// (255 internal nodes and 256 leaves, 511 nodes total). Leaves represent
+// byte values; internal nodes just route bits. Decoding maps a 1 bit to
+// the left child and a 0 bit to the right child.
+//
+// Each leaf starts with weight 0. Every time a byte is decoded, its leaf's
+// weight is incremented and the tree is adjusted so heavier nodes tend to
+// move closer to the root. Because the shape never changes, the tree can
+// be stored in a flat heap-ordered arena and updated by relinking indices.
 const NODE_COUNT: usize = 511;
+// Sentinel used for absent parents/children. All real node indices fit in u16.
 const NIL: u16 = u16::MAX;
 
 /// Errors returned by the BXL decompression API.
@@ -81,10 +88,12 @@ impl std::error::Error for Error {
 
 #[derive(Clone, Copy)]
 struct TreeNode {
+    // Number of decoded bytes that pass through this node.
     weight: u32,
     parent: u16,
     left: u16,
     right: u16,
+    // Non-negative for leaves (the represented byte), -1 for internal nodes.
     symbol: i16,
 }
 
@@ -109,6 +118,8 @@ impl NodeTree {
 
         let mut idx = 0;
         while idx < NODE_COUNT {
+            // Heap layout: children of `idx` are 2*idx+1 (left/1-bit) and
+            // 2*idx+2 (right/0-bit).
             if idx != 0 {
                 nodes[idx].parent = ((idx - 1) / 2) as u16;
             }
@@ -116,6 +127,8 @@ impl NodeTree {
                 nodes[idx].left = (2 * idx + 1) as u16;
                 nodes[idx].right = (2 * idx + 2) as u16;
             } else {
+                // Leaves occupy the second half of the arena. With the
+                // left/right convention above, symbol `s` starts at 510 - s.
                 nodes[idx].symbol = (NODE_COUNT - 1 - idx) as i16;
             }
             idx += 1;
@@ -126,6 +139,8 @@ impl NodeTree {
 
     #[inline]
     fn replace_child(&mut self, parent: u16, old: u16, new: u16) {
+        // Replace one of `parent`'s children and repair the new child's
+        // parent link. Used when rotating nodes during an update.
         if self[parent].right == old {
             self[parent].right = new;
         } else if self[parent].left == old {
@@ -144,6 +159,11 @@ impl NodeTree {
     /// Only the local three-node rotation and the affected ancestor weights
     /// are touched; no hashing, scanning, cloning, or allocation is needed.
     fn update(&mut self, current: u16) {
+        // The adaptive Huffman update maintains the sibling property:
+        // nodes are ordered by weight, with heavier nodes closer to the
+        // root. A node only needs to move when it has become heavier than
+        // its parent. The root and its children have no valid rotation, so
+        // they stop the walk.
         let parent = self[current].parent;
         if parent == NIL {
             return;
@@ -156,17 +176,22 @@ impl NodeTree {
             return;
         }
 
+        // The parent's sibling is the other child of the grandparent.
         let parent_sibling = {
             let gp = &self[grandparent];
             if gp.left == parent { gp.right } else { gp.left }
         };
 
-        // Rotate: current takes parent's place, parent takes the parent
-        // sibling's place, and the parent sibling takes current's place.
+        // Rotate three nodes: `current` takes its parent's place, the
+        // parent takes the parent's sibling's place, and the parent's
+        // sibling takes `current`'s old place. This preserves the complete
+        // tree shape while moving the heavier node upward.
         self.replace_child(grandparent, parent, current);
         self.replace_child(grandparent, parent_sibling, parent);
         self.replace_child(parent, current, parent_sibling);
 
+        // The rotation changed which children belong to `parent` and
+        // `grandparent`, so recompute their weights from their new children.
         let (left, right) = {
             let p = &self[parent];
             (p.left, p.right)
@@ -175,6 +200,8 @@ impl NodeTree {
         self[parent].weight = parent_weight;
         self[grandparent].weight = self[current].weight + parent_weight;
 
+        // The rotation may have made another local relationship invalid;
+        // continue upward from each node whose position or children changed.
         self.update(parent);
         self.update(grandparent);
         self.update(current);
@@ -199,10 +226,13 @@ impl IndexMut<u16> for NodeTree {
 
 #[inline]
 fn get_bit(input: &[u8], bit: usize) -> u8 {
+    // Bits are packed most-significant-bit first within each byte.
     (input[bit >> 3] >> (7 - (bit & 7))) & 1
 }
 
 fn parse_header(input: &[u8]) -> Result<(usize, &[u8]), Error> {
+    // The format begins with a four-byte, bit-reversed big-endian size.
+    // Reversing the bits yields the number of bytes the payload expands to.
     let header = match input.first_chunk::<4>() {
         Some(header) => header,
         None => return Err(Error::InputTooShort),
@@ -228,10 +258,13 @@ fn decode<F: FnMut(u8)>(compressed: &[u8], u_size: usize, mut emit: F) -> Result
     let mut decoded = 0usize;
 
     for bit in 0..num_bits {
+        // The header gives the exact output size; any remaining bits in the
+        // final compressed byte are padding and are deliberately ignored.
         if decoded == u_size {
             break;
         }
 
+        // 1 selects the left child, 0 the right child.
         let bit_value = get_bit(compressed, bit);
         node = if bit_value != 0 {
             tree[node].left
@@ -239,6 +272,8 @@ fn decode<F: FnMut(u8)>(compressed: &[u8], u_size: usize, mut emit: F) -> Result
             tree[node].right
         };
 
+        // A non-negative symbol marks a leaf. Emit it, then increase its
+        // weight and adapt the tree before starting the next symbol at root.
         let symbol = tree[node].symbol;
         if symbol >= 0 {
             emit(symbol as u8);
@@ -260,6 +295,9 @@ fn decode<F: FnMut(u8)>(compressed: &[u8], u_size: usize, mut emit: F) -> Result
 }
 
 fn read_header<R: Read>(reader: &mut R) -> Result<usize, Error> {
+    // The stream has the same four-byte bit-reversed size header as the
+    // slice-based format. Read it separately so decoding can start at the
+    // first compressed byte.
     let mut header = [0u8; 4];
     match reader.read_exact(&mut header) {
         Ok(()) => Ok(u32::from_be_bytes(header).swap_bits() as usize),
@@ -277,6 +315,10 @@ impl<R: Read> ByteReader<R> {
         Self { reader }
     }
 
+    /// Read the next compressed byte, returning `None` at end of input.
+    ///
+    /// Buffering is intentionally left to the caller (for example with a
+    /// `BufReader`); this adapter never allocates or buffers internally.
     #[inline]
     fn next_byte(&mut self) -> io::Result<Option<u8>> {
         let mut byte = [0u8; 1];
@@ -299,6 +341,9 @@ fn decode_reader<R: Read, F: FnMut(u8)>(
     let mut node: u16 = 2;
     let mut decoded = 0usize;
 
+    // Read one byte at a time and walk its eight bits from MSB to LSB.
+    // This is the streaming equivalent of `decode`: the tree state and bit
+    // order are identical, but the input arrives through `Read`.
     while decoded < u_size {
         let byte = match bytes.next_byte() {
             Ok(Some(byte)) => byte,
