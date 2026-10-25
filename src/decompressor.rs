@@ -81,7 +81,6 @@
 use std::collections::TryReserveError;
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::ops::{Index, IndexMut};
 
 use bit_reverse::ParallelReverse;
 
@@ -94,7 +93,7 @@ use bit_reverse::ParallelReverse;
 // Each leaf starts with weight 0. Every time a byte is decoded, its leaf's
 // weight is incremented and the tree is adjusted so heavier nodes tend to
 // move closer to the root. Because the shape never changes, the tree can
-// be stored in a flat heap-ordered arena and updated by relinking indices.
+// be stored in fixed-size structure-of-arrays and updated by relinking indices.
 const NODE_COUNT: usize = 511;
 // Sentinel used for absent parents/children. All real node indices fit in u16.
 const NIL: u16 = u16::MAX;
@@ -148,19 +147,19 @@ impl std::error::Error for Error {
     }
 }
 
-#[derive(Clone, Copy)]
-struct TreeNode {
-    // Number of decoded bytes that pass through this node.
-    weight: u32,
-    parent: u16,
-    left: u16,
-    right: u16,
-    // Non-negative for leaves (the represented byte), -1 for internal nodes.
-    symbol: i16,
-}
-
+/// Adaptive Huffman tree stored as a structure-of-arrays.
+///
+/// All five node fields live in their own fixed-size array. The tree is a
+/// complete 8-level binary tree, so a node index fully identifies a node and
+/// the arrays never grow.
 struct NodeTree {
-    nodes: [TreeNode; NODE_COUNT],
+    // Number of decoded bytes that pass through this node.
+    weight: [u32; NODE_COUNT],
+    parent: [u16; NODE_COUNT],
+    left: [u16; NODE_COUNT],
+    right: [u16; NODE_COUNT],
+    // Non-negative for leaves (the represented byte), -1 for internal nodes.
+    symbol: [i16; NODE_COUNT],
 }
 
 impl NodeTree {
@@ -170,49 +169,54 @@ impl NodeTree {
     /// Decoding maps a 1 bit to the left child and a 0 bit to the right
     /// child, so the leaf for symbol `s` lives at `510 - s`.
     const fn new() -> Self {
-        let mut nodes = [TreeNode {
-            weight: 0,
-            parent: NIL,
-            left: NIL,
-            right: NIL,
-            symbol: -1,
-        }; NODE_COUNT];
+        let weight = [0u32; NODE_COUNT];
+        let mut parent = [NIL; NODE_COUNT];
+        let mut left = [NIL; NODE_COUNT];
+        let mut right = [NIL; NODE_COUNT];
+        let mut symbol = [-1i16; NODE_COUNT];
 
         let mut idx = 0;
         while idx < NODE_COUNT {
             // Heap layout: children of `idx` are 2*idx+1 (left/1-bit) and
             // 2*idx+2 (right/0-bit).
             if idx != 0 {
-                nodes[idx].parent = ((idx - 1) / 2) as u16;
+                parent[idx] = ((idx - 1) / 2) as u16;
             }
             if idx < (NODE_COUNT - 1) / 2 {
-                nodes[idx].left = (2 * idx + 1) as u16;
-                nodes[idx].right = (2 * idx + 2) as u16;
+                left[idx] = (2 * idx + 1) as u16;
+                right[idx] = (2 * idx + 2) as u16;
             } else {
                 // Leaves occupy the second half of the arena. With the
                 // left/right convention above, symbol `s` starts at 510 - s.
-                nodes[idx].symbol = (NODE_COUNT - 1 - idx) as i16;
+                symbol[idx] = (NODE_COUNT - 1 - idx) as i16;
             }
             idx += 1;
         }
 
-        Self { nodes }
+        Self {
+            weight,
+            parent,
+            left,
+            right,
+            symbol,
+        }
     }
 
     #[inline]
     fn replace_child(&mut self, parent: u16, old: u16, new: u16) {
         // Replace one of `parent`'s children and repair the new child's
         // parent link. Used when rotating nodes during an update.
-        if self[parent].right == old {
-            self[parent].right = new;
-        } else if self[parent].left == old {
-            self[parent].left = new;
+        let parent_idx = parent as usize;
+        if self.right[parent_idx] == old {
+            self.right[parent_idx] = new;
+        } else if self.left[parent_idx] == old {
+            self.left[parent_idx] = new;
         } else {
             debug_assert!(false, "node {old} is not a child of {parent}");
             return;
         }
         if new != NIL {
-            self[new].parent = parent;
+            self.parent[new as usize] = parent;
         }
     }
 
@@ -226,22 +230,26 @@ impl NodeTree {
         // root. A node only needs to move when it has become heavier than
         // its parent. The root and its children have no valid rotation, so
         // they stop the walk.
-        let parent = self[current].parent;
+        let current_idx = current as usize;
+        let parent = self.parent[current_idx];
         if parent == NIL {
             return;
         }
-        let grandparent = self[parent].parent;
+        let parent_idx = parent as usize;
+        let grandparent = self.parent[parent_idx];
         if grandparent == NIL {
             return;
         }
-        if self[current].weight <= self[parent].weight {
+        if self.weight[current_idx] <= self.weight[parent_idx] {
             return;
         }
 
         // The parent's sibling is the other child of the grandparent.
-        let parent_sibling = {
-            let gp = &self[grandparent];
-            if gp.left == parent { gp.right } else { gp.left }
+        let grandparent_idx = grandparent as usize;
+        let parent_sibling = if self.left[grandparent_idx] == parent {
+            self.right[grandparent_idx]
+        } else {
+            self.left[grandparent_idx]
         };
 
         // Rotate three nodes: `current` takes its parent's place, the
@@ -254,35 +262,17 @@ impl NodeTree {
 
         // The rotation changed which children belong to `parent` and
         // `grandparent`, so recompute their weights from their new children.
-        let (left, right) = {
-            let p = &self[parent];
-            (p.left, p.right)
-        };
-        let parent_weight = self[left].weight + self[right].weight;
-        self[parent].weight = parent_weight;
-        self[grandparent].weight = self[current].weight + parent_weight;
+        let left = self.left[parent_idx];
+        let right = self.right[parent_idx];
+        let parent_weight = self.weight[left as usize] + self.weight[right as usize];
+        self.weight[parent_idx] = parent_weight;
+        self.weight[grandparent_idx] = self.weight[current_idx] + parent_weight;
 
         // The rotation may have made another local relationship invalid;
         // continue upward from each node whose position or children changed.
         self.update(parent);
         self.update(grandparent);
         self.update(current);
-    }
-}
-
-impl Index<u16> for NodeTree {
-    type Output = TreeNode;
-
-    #[inline(always)]
-    fn index(&self, index: u16) -> &Self::Output {
-        &self.nodes[index as usize]
-    }
-}
-
-impl IndexMut<u16> for NodeTree {
-    #[inline(always)]
-    fn index_mut(&mut self, index: u16) -> &mut Self::Output {
-        &mut self.nodes[index as usize]
     }
 }
 
@@ -328,19 +318,21 @@ fn decode<F: FnMut(u8)>(compressed: &[u8], u_size: usize, mut emit: F) -> Result
 
         // 1 selects the left child, 0 the right child.
         let bit_value = get_bit(compressed, bit);
+        let node_idx = node as usize;
         node = if bit_value != 0 {
-            tree[node].left
+            tree.left[node_idx]
         } else {
-            tree[node].right
+            tree.right[node_idx]
         };
 
         // A non-negative symbol marks a leaf. Emit it, then increase its
         // weight and adapt the tree before starting the next symbol at root.
-        let symbol = tree[node].symbol;
+        let node_idx = node as usize;
+        let symbol = tree.symbol[node_idx];
         if symbol >= 0 {
             emit(symbol as u8);
             decoded += 1;
-            tree[node].weight += 1;
+            tree.weight[node_idx] += 1;
             tree.update(node);
             node = 0;
         }
@@ -424,17 +416,19 @@ fn decode_reader<R: Read, F: FnMut(u8)>(
             }
 
             let bit_value = (byte >> shift) & 1;
+            let node_idx = node as usize;
             node = if bit_value != 0 {
-                tree[node].left
+                tree.left[node_idx]
             } else {
-                tree[node].right
+                tree.right[node_idx]
             };
 
-            let symbol = tree[node].symbol;
+            let node_idx = node as usize;
+            let symbol = tree.symbol[node_idx];
             if symbol >= 0 {
                 emit(symbol as u8);
                 decoded += 1;
-                tree[node].weight += 1;
+                tree.weight[node_idx] += 1;
                 tree.update(node);
                 node = 0;
             }
@@ -626,21 +620,20 @@ mod tests {
     #[test]
     fn arena_tree_is_complete() {
         let tree = NodeTree::new();
-        let nodes = &tree.nodes;
-        assert_eq!(nodes.len(), NODE_COUNT);
-        assert_eq!((nodes[0].left, nodes[0].right), (1, 2));
+        assert_eq!(tree.parent.len(), NODE_COUNT);
+        assert_eq!((tree.left[0], tree.right[0]), (1, 2));
 
         let mut leaves = 0;
-        for (idx, node) in nodes.iter().enumerate() {
-            if node.symbol >= 0 {
+        for idx in 0..NODE_COUNT {
+            if tree.symbol[idx] >= 0 {
                 leaves += 1;
-                assert_eq!(idx, (NODE_COUNT - 1 - node.symbol as usize));
+                assert_eq!(idx, (NODE_COUNT - 1 - tree.symbol[idx] as usize));
             } else {
-                assert!(node.left != NIL && node.right != NIL);
+                assert!(tree.left[idx] != NIL && tree.right[idx] != NIL);
             }
         }
         assert_eq!(leaves, 256);
-        assert_eq!(nodes[510].symbol, 0);
-        assert_eq!(nodes[255].symbol, 255);
+        assert_eq!(tree.symbol[510], 0);
+        assert_eq!(tree.symbol[255], 255);
     }
 }
