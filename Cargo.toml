@@ -1,6 +1,6 @@
 [package]
 name = "bxl"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["cyrozap"]
 license = "GPL-3.0-or-later"
 readme = "README.md"
